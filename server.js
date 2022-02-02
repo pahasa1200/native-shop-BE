@@ -2,7 +2,7 @@ const express = require('express')
 const jwtDecode = require('jwt-decode')
 const jsonwebtoken = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
-const randToken = require('rand-token'); 
+const randToken = require('rand-token');
 const cors = require('cors')
 const mongoose = require('mongoose')
 const jwt = require('express-jwt');
@@ -14,14 +14,16 @@ const port = 3000
 const SECRET = 'changeme';
 
 const User = require('./model/User');
+const Product = require('./model/Product');
 const Token = require('./model/Token');
+const OrderedProduct = require('./model/OrderedProduct');
 
 app.use(cors())
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
 const generateToken = user => {
- 
+
     const token = jsonwebtoken.sign({
     sub: user._id,
     email: user.email,
@@ -31,8 +33,8 @@ const generateToken = user => {
     expiresIn: '1h',
     algorithm: 'HS256'
   })
- 
- 
+
+
   return token
 }
 
@@ -52,18 +54,18 @@ const checkPassword = (password, hash) => bcrypt.compare(password, hash)
 
 const getRefreshToken = () => randToken.uid(256)
 
-// API ENDPOINTS 
+// API ENDPOINTS
 
 app.post('/api/login', async (req, res) => {
     const { email, password } = req.body
     const user = await User.findOne({ email })
-    if (!user) { 
+    if (!user) {
         return res.status(401).json({
             message: 'User not found!'
         })
       }
     const isPasswordValid = await checkPassword(password, user.password)
-  
+
     if(!isPasswordValid) {
         return res.status(401).json({
             message: 'Invalid password!'
@@ -79,7 +81,13 @@ app.post('/api/login', async (req, res) => {
     res.json({
         accessToken,
         expiresAt: accessTokenExpiresAt,
-        refreshToken
+        refreshToken,
+        user: {
+            id: user._id,
+            email: user.email,
+            firstName: user.firstName,
+            lastName: user.lastName
+        }
     })
 })
 
@@ -122,7 +130,7 @@ app.post('/api/register', async (req, res) => {
 
 
 app.post('/api/refreshToken', async (req, res) => {
-  const {refreshToken } = req.body
+  const { refreshToken } = req.body
   try {
     const user = await Token.findOne({refreshToken}).select('user')
 
@@ -180,11 +188,101 @@ app.get('/api/cat',requireAuth, async (req, res) => {
    const response = await axios.get('https://cataas.com/cat', { responseType:"arraybuffer" })
    let raw = Buffer.from(response.data).toString('base64');
    res.send("data:" + response.headers["content-type"] + ";base64,"+raw);
-
 })
 
+app.get('/api/products',requireAuth, async (req, res) => {
+    const products = await Product.find({}).lean();
+    return res.status(200).json({
+        data: products
+    })
+})
+
+app.post('/api/product', requireAuth, async (req, res) => {
+
+    const { name, cost } = req.body
+
+    const productData = {
+        name: name,
+        cost: cost,
+    }
+
+    const existingProduct = await Product.findOne({ name: name }).lean()
+
+    if(existingProduct) {
+        return res.status(400).json({
+            message: 'Product already exists'
+        })
+    }
+
+    const product = new Product(productData)
+    const savedProduct = await product.save()
+
+    if(savedProduct) {
+
+        return res.status(200).json({
+            message: 'Product created successfully',
+            name: name,
+            cost: cost,
+        })
+    }
+})
+
+app.delete('/api/product/:id', requireAuth, async (req, res) => {
+    const id = req.params.id;
+      const result = await Product.deleteOne({ _id: id });
+      const deleteFromCart = await OrderedProduct.deleteMany({ product: id });
+
+    if (result) {
+        return res.status(200).json ({
+            message: 'Ok'
+        })
+    }
+})
+
+app.get('/api/cart/:id', requireAuth, async (req, res) => {
+    const id = req.params.id;
+    const products = await OrderedProduct.find({ user: id }).populate('product').lean()
+    if (products) {
+            return res.status(200).json ({
+                message: 'Ok',
+                data: products
+            })
+    }
+})
+
+app.post('/api/cart', requireAuth, async (req, res) => {
+    const { product, user, count } = req.body
+
+    const cartData = {
+        product: product,
+        count: count,
+        user: user
+    }
+
+    const productRes = await OrderedProduct.findOne({ product: product }).lean()
+    const userRes = await OrderedProduct.findOne({ user: user }).lean()
+
+    if(productRes && userRes) {
+        return res.status(400).json({
+            message: 'Product already in cart'
+        })
+    }
+
+    const orderedProduct = new OrderedProduct(cartData)
+    const savedOrderedProduct = await orderedProduct.save()
+
+    if (savedOrderedProduct) {
+        return res.status(200).json ({
+            message: 'Ok'
+        })
+
+    }
+})
+
+
+
 async function connect() {
-  try {    
+  try {
     mongoose.Promise = global.Promise;
     await mongoose.connect("mongodb://localhost:27017", {
       useNewUrlParser: true,
